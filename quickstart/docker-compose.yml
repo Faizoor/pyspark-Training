@@ -1,5 +1,25 @@
 services:
 
+  # ---------------------------------------------------------------------------
+  # Init container: ensures /opt/spark-events (the shared event log volume)
+  # is writable by the spark user (uid 185) before any Spark service starts.
+  # Docker named volumes are created owned by root, so chmod is required.
+  # ---------------------------------------------------------------------------
+  spark-perm-fix:
+    image: alpine
+    user: root
+    volumes:
+      - spark-logs:/opt/spark-events
+    command: ["chmod", "777", "/opt/spark-events"]
+    networks:
+      - spark-network
+
+  # ---------------------------------------------------------------------------
+  # Spark Master
+  # Manages cluster resources and schedules applications.
+  # Web UI: http://localhost:8080
+  # Driver UI during job execution: http://localhost:4040
+  # ---------------------------------------------------------------------------
   spark-master:
     image: apache/spark:4.1.1-scala2.13-java21-python3-ubuntu
     container_name: spark-master
@@ -14,10 +34,12 @@ services:
       - "8080"
     ports:
       - "8080:8080"   # Spark Master Web UI
-      - "7077:7077"   # Spark Master port
+      - "7077:7077"   # Spark Master RPC port
+      - "4040:4040"   # Driver / Application Web UI (live during job execution)
     volumes:
-      - ./jobs:/opt/spark/jobs
-      - spark-logs:/opt/spark/spark-events
+      - ./jobs:/opt/spark/jobs                # job scripts
+      - ./conf:/opt/spark/conf                # spark-defaults.conf + spark-env.sh
+      - spark-logs:/opt/spark-events          # shared event log directory
     networks:
       - spark-network
     healthcheck:
@@ -26,7 +48,16 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    depends_on:
+      spark-perm-fix:
+        condition: service_completed_successfully
 
+  # ---------------------------------------------------------------------------
+  # Spark Worker 1
+  # Executes tasks assigned by the Master.
+  # Web UI: http://localhost:8081
+  # Resources defined in conf/spark-env.sh (SPARK_WORKER_CORES / MEMORY).
+  # ---------------------------------------------------------------------------
   spark-worker-1:
     image: apache/spark:4.1.1-scala2.13-java21-python3-ubuntu
     container_name: spark-worker-1
@@ -36,20 +67,23 @@ services:
       - --webui-port
       - "8081"
       - spark://spark-master:7077
-    environment:
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=2g
     ports:
       - "8081:8081"   # Worker 1 Web UI
     volumes:
       - ./jobs:/opt/spark/jobs
-      - spark-logs:/opt/spark/spark-events
+      - ./conf:/opt/spark/conf
+      - spark-logs:/opt/spark-events
     depends_on:
       spark-master:
         condition: service_healthy
     networks:
       - spark-network
 
+  # ---------------------------------------------------------------------------
+  # Spark Worker 2
+  # Executes tasks assigned by the Master.
+  # Web UI: http://localhost:8082
+  # ---------------------------------------------------------------------------
   spark-worker-2:
     image: apache/spark:4.1.1-scala2.13-java21-python3-ubuntu
     container_name: spark-worker-2
@@ -59,38 +93,47 @@ services:
       - --webui-port
       - "8082"
       - spark://spark-master:7077
-    environment:
-      - SPARK_WORKER_CORES=2
-      - SPARK_WORKER_MEMORY=2g
     ports:
       - "8082:8082"   # Worker 2 Web UI
     volumes:
       - ./jobs:/opt/spark/jobs
-      - spark-logs:/opt/spark/spark-events
+      - ./conf:/opt/spark/conf
+      - spark-logs:/opt/spark-events
     depends_on:
       spark-master:
         condition: service_healthy
     networks:
       - spark-network
 
+  # ---------------------------------------------------------------------------
+  # Spark History Server
+  # Reads completed application event logs from /opt/spark-events and shows
+  # them in a browseable UI after the job finishes (no 403 / missing app).
+  # Web UI: http://localhost:18080
+  # spark.history.fs.logDirectory and spark.history.ui.port are set in
+  # conf/spark-defaults.conf — no extra environment variables needed here.
+  # ---------------------------------------------------------------------------
   spark-history:
     image: apache/spark:4.1.1-scala2.13-java21-python3-ubuntu
     container_name: spark-history
     command:
       - /opt/spark/bin/spark-class
       - org.apache.spark.deploy.history.HistoryServer
-    environment:
-      - SPARK_HISTORY_OPTS=-Dspark.history.fs.logDirectory=/opt/spark/spark-events
     ports:
       - "18080:18080"  # History Server Web UI
     volumes:
-      - spark-logs:/opt/spark/spark-events
+      - ./conf:/opt/spark/conf
+      - spark-logs:/opt/spark-events
     depends_on:
       spark-master:
         condition: service_healthy
     networks:
       - spark-network
 
+# -----------------------------------------------------------------------------
+# Named volume shared by all Spark services for event logs.
+# Created once by Docker; the spark-perm-fix init container makes it writable.
+# -----------------------------------------------------------------------------
 volumes:
   spark-logs:
 

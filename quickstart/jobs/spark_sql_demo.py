@@ -62,7 +62,11 @@ print(f"\n{SEP}")
 print("  SECTION 02 — Writing sample JSON and CSV files")
 print(SEP)
 
-DATA_DIR = "/tmp/spark_sql_demo"
+# /opt/spark/jobs is a Docker bind-mount shared by master AND all workers
+# (defined in docker-compose.yml: ./jobs:/opt/spark/jobs).
+# Files written here are visible to every executor — unlike /tmp which is
+# local to each container and NOT shared across the cluster.
+DATA_DIR = "/opt/spark/jobs/spark_sql_demo_data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # Small JSON dataset — employees with nested dept and skills array

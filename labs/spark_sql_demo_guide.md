@@ -3,7 +3,7 @@
 > **Spark version:** 4.1.1  
 > **Cluster:** standalone, 1 master + 2 workers (2 cores / 2 GB each)  
 > **Script:** `quickstart/jobs/spark_sql_demo.py`  
-> **Data:** created inline by the script into `/tmp/spark_sql_demo/`
+> **Data:** created inline by the script into `/opt/spark/jobs/spark_sql_demo_data/` (shared Docker volume, visible to all workers)
 
 ---
 
@@ -111,7 +111,15 @@ SparkSession created. Spark version: 4.1.1
 **What it demonstrates:**  
 Generating small, self-contained test data without external dependencies.  
 The script writes a JSON file (one object per line — Spark's default JSON format)
-and a CSV file to `/tmp/spark_sql_demo/` using plain Python.
+and a CSV file to `/opt/spark/jobs/spark_sql_demo_data/` using plain Python.
+
+> **Why not `/tmp`?**  
+> In a multi-node cluster, each container (master + workers) has its own isolated
+> `/tmp`. The driver writes the file on the master, but workers run on separate
+> containers and look for the file on *their* local `/tmp` — where it doesn't exist.  
+> `/opt/spark/jobs` is a **Docker bind-mount** defined in `docker-compose.yml`
+> (`./jobs:/opt/spark/jobs`) that is shared by **all** containers, so every
+> worker can read any file written there by the driver.
 
 **Sample JSON record:**
 ```json
@@ -128,8 +136,8 @@ North,Phone,25,7500
 
 **Expected output:**
 ```
-JSON written → /tmp/spark_sql_demo/employees.json
-CSV  written → /tmp/spark_sql_demo/sales.csv
+JSON written → /opt/spark/jobs/spark_sql_demo_data/employees.json
+CSV  written → /opt/spark/jobs/spark_sql_demo_data/sales.csv
 ```
 
 ---
@@ -154,6 +162,11 @@ employee_schema = StructType([
     StructField("skills",     ArrayType(StringType()), nullable=True),
     StructField("salary",     DoubleType(),            nullable=True),
 ])
+
+# StructType has no printTreeString() in Python.
+# Create an empty DataFrame with the schema and call printSchema() instead.
+print("Schema defined:")
+spark.createDataFrame([], employee_schema).printSchema()
 ```
 
 **Expected output:**
@@ -488,7 +501,7 @@ Parquet is the recommended columnar storage format for Spark.
 Spark writes multiple part files in the output directory (one per partition).
 
 ```python
-parquet_path = "/tmp/spark_sql_demo/employees_parquet"
+parquet_path = "/opt/spark/jobs/spark_sql_demo_data/employees_parquet"
 
 emp_df.write.mode("overwrite").parquet(parquet_path)
 
@@ -499,7 +512,7 @@ parquet_df.select("id", "name", "salary").show()
 
 **Expected output:**
 ```
-Parquet written to: /tmp/spark_sql_demo/employees_parquet
+Parquet written to: /opt/spark/jobs/spark_sql_demo_data/employees_parquet
 
 +---+-----+--------+
 | id| name|  salary|
@@ -590,10 +603,11 @@ to understand where the heavy work happens.
 
 | Step | Command |
 |------|---------|
+| Pre-create data dir (once) | `mkdir -p quickstart/jobs/spark_sql_demo_data && chmod o+w quickstart/jobs/spark_sql_demo_data` |
 | Start cluster | `cd quickstart && docker compose up -d` |
 | Run demo | `docker exec spark-master /opt/spark/bin/spark-submit --master spark://spark-master:7077 /opt/spark/jobs/spark_sql_demo.py` |
 | Open Spark UI | http://localhost:8080 |
-| Inspect output files | `docker exec spark-master ls /tmp/spark_sql_demo/` |
+| Inspect output files | `docker exec spark-master ls /opt/spark/jobs/spark_sql_demo_data/` |
 
 ---
 
@@ -601,7 +615,8 @@ to understand where the heavy work happens.
 
 | Error | Likely Cause | Fix |
 |-------|-------------|-----|
-| `AnalysisException: Path does not exist` | Data dir missing inside container | The script creates `/tmp/spark_sql_demo/` automatically |
+| `PermissionError: [Errno 13] Permission denied` | `spark_sql_demo_data/` exists in bind-mount but `spark` user (uid 185) has no write permission | Run `chmod o+w quickstart/jobs/spark_sql_demo_data` on the **host** |
+| `AnalysisException: Path does not exist` | Data dir not pre-created on host before container start | Run `mkdir -p quickstart/jobs/spark_sql_demo_data && chmod o+w quickstart/jobs/spark_sql_demo_data` |
 | `WARN: No master set` | Missing `--master` flag | Always pass `--master spark://spark-master:7077` |
 | `ClassNotFoundException: org.postgresql.Driver` | JDBC JAR not on classpath | Add `--jars /path/to/postgresql.jar` to spark-submit |
 | UDF returns `null` for all rows | Return type mismatch | Ensure the UDF's declared return type matches the Python function's output |
