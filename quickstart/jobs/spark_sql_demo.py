@@ -15,13 +15,19 @@ Demonstrates:
   11. Nested JSON fields
   12. explode() on array columns
   13. Writing Parquet
-  14. JDBC read (code-only, no live DB required)
+  14. JDBC read — live PostgreSQL via docker-compose.postgres.yml
   15. S3 read (code-only example)
   16. explain(True) — execution plan
 
-Run:
+Run (Spark cluster only — Sections 01-13, 15-16):
   docker exec spark-master /opt/spark/bin/spark-submit \
     --master spark://spark-master:7077 \
+    /opt/spark/jobs/spark_sql_demo.py
+
+Run with JDBC / PostgreSQL (Section 14 — requires docker-compose.postgres.yml):
+  docker exec spark-master /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 \
+    --jars /opt/spark/jobs/postgresql-42.7.3.jar \
     /opt/spark/jobs/spark_sql_demo.py
 """
 
@@ -351,29 +357,37 @@ parquet_df.select("id", "name", "salary").show()
 
 
 # ─────────────────────────────────────────────────────────────────────
-# SECTION 14 — JDBC read (code-only, no live database required)
+# SECTION 14 — JDBC read from PostgreSQL
 # ─────────────────────────────────────────────────────────────────────
 print(f"\n{SEP}")
-print("  SECTION 14 — JDBC read (code template — no live DB needed)")
+print("  SECTION 14 — JDBC read from PostgreSQL")
 print(SEP)
 
-print("""
-  # To read from a PostgreSQL table, you would write:
-  #
-  # jdbc_df = spark.read \\
-  #     .format("jdbc") \\
-  #     .option("url",      "jdbc:postgresql://localhost:5432/mydb") \\
-  #     .option("dbtable",  "public.employees") \\
-  #     .option("user",     "postgres") \\
-  #     .option("password", "secret") \\
-  #     .option("driver",   "org.postgresql.Driver") \\
-  #     .load()
-  #
-  # jdbc_df.show()
-  #
-  # The JDBC JAR must be on the classpath:
-  #   spark-submit --jars /path/to/postgresql-42.x.x.jar spark_sql_demo.py
-""")
+# Requires:
+#   1. docker-compose.postgres.yml stack running (spark-postgres container).
+#   2. JDBC JAR on the classpath — pass --jars /opt/spark/jobs/postgresql-42.7.3.jar
+#      to spark-submit (the jdbc-jar-downloader service drops it there).
+#
+# Inside the shared docker network the PostgreSQL host is the service name
+# "postgres", NOT "localhost".
+
+try:
+    jdbc_df = spark.read \
+        .format("jdbc") \
+        .option("url",      "jdbc:postgresql://postgres:5432/mydb") \
+        .option("dbtable",  "public.employees") \
+        .option("user",     "postgres") \
+        .option("password", "secret") \
+        .option("driver",   "org.postgresql.Driver") \
+        .load()
+
+    print("→ Employees table read from PostgreSQL via JDBC:")
+    jdbc_df.show()
+    jdbc_df.printSchema()
+except Exception as exc:
+    print(f"  [SKIP] JDBC read unavailable: {exc}")
+    print("  Start the postgres stack first:")
+    print("    docker compose -f docker-compose.postgres.yml up -d")
 
 
 # ─────────────────────────────────────────────────────────────────────

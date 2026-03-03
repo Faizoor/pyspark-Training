@@ -4,12 +4,21 @@ Get a fully functional Apache Spark **4.1.1** cluster running locally in minutes
 
 ## Cluster topology
 
+### Spark cluster (`docker-compose.yml`)
+
 | Service | Container | Port |
 |---|---|---|
 | Spark Master | `spark-master` | `7077` (cluster), `8080` (Web UI) |
 | Spark Worker 1 | `spark-worker-1` | `8081` (Web UI) |
 | Spark Worker 2 | `spark-worker-2` | `8082` (Web UI) |
 | History Server | `spark-history` | `18080` (Web UI) |
+
+### PostgreSQL stack (`docker-compose.postgres.yml`) — optional, for JDBC demo
+
+| Service | Container | Port |
+|---|---|---|
+| PostgreSQL 16 | `spark-postgres` | `5432` |
+| JDBC JAR downloader | `jdbc-jar-downloader` | — |
 
 ---
 
@@ -96,8 +105,94 @@ docker exec -it spark-master /opt/spark/bin/pyspark \
 # Stop and remove containers (keeps the spark-logs volume)
 docker compose down
 
-# Stop AND remove containers + volumes
+# Stop AND remove containers + volumes (including spark-logs)
 docker compose down -v
+```
+
+---
+
+## PostgreSQL JDBC demo (Section 14 of `spark_sql_demo.py`)
+
+This optional stack adds a PostgreSQL 16 database on the same Docker network so
+Spark can read from it via JDBC.
+
+### 1. Start the Spark cluster first (if not already running)
+
+```bash
+docker compose up -d
+```
+
+### 2. Start PostgreSQL and download the JDBC JAR
+
+```bash
+docker compose -f docker-compose.postgres.yml up -d
+```
+
+This starts two one-time services:
+- **`spark-postgres`** — PostgreSQL 16 pre-seeded with `public.employees` (same 5 rows as the JSON dataset).
+- **`jdbc-jar-downloader`** — downloads `postgresql-42.7.3.jar` into `./jobs/` so every Spark container can reach it at `/opt/spark/jobs/postgresql-42.7.3.jar`.
+
+Wait ~10 seconds for Postgres to be healthy:
+
+```bash
+docker inspect --format='{{.State.Health.Status}}' spark-postgres
+# expected: healthy
+```
+
+> **If the JAR downloader fails** (permission error on the bind-mount), download it manually:  
+> `curl -L -o jobs/postgresql-42.7.3.jar https://jdbc.postgresql.org/download/postgresql-42.7.3.jar`
+
+### 3. Run the Spark SQL demo with the JDBC JAR
+
+```bash
+docker exec spark-master \
+  /opt/spark/bin/spark-submit \
+    --master spark://spark-master:7077 \
+    --jars /opt/spark/jobs/postgresql-42.7.3.jar \
+    /opt/spark/jobs/spark_sql_demo.py
+```
+
+Section 14 of the output will show the employees table read live from PostgreSQL:
+
+```
+=================================================================
+  SECTION 14 — JDBC read from PostgreSQL
+=================================================================
+→ Employees table read from PostgreSQL via JDBC:
++---+-----+-----------+----------+---------+
+| id| name|  dept_name|dept_floor|   salary|
++---+-----+-----------+----------+---------+
+|  1|Alice|Engineering|         3| 95000.00|
+|  2|  Bob|  Marketing|         2| 72000.00|
+|  3|Carol|Engineering|         3|105000.00|
+|  4| Dave|         HR|         1| 65000.00|
+|  5|  Eve|  Marketing|         2| 78000.00|
++---+-----+-----------+----------+---------+
+```
+
+### 4. Connect directly with psql (optional)
+
+```bash
+docker exec -it spark-postgres psql -U postgres -d mydb
+```
+
+### 5. Stop and remove both stacks
+
+```bash
+# Stop PostgreSQL stack (keeps postgres-data volume)
+docker compose -f docker-compose.postgres.yml down
+
+# Stop PostgreSQL stack AND remove its volume
+docker compose -f docker-compose.postgres.yml down -v
+
+# Stop Spark cluster (keeps spark-logs volume)
+docker compose down
+
+# Stop Spark cluster AND remove its volume
+docker compose down -v
+
+# Tear down everything in one go
+docker compose -f docker-compose.postgres.yml down -v && docker compose down -v
 ```
 
 ---
@@ -106,10 +201,19 @@ docker compose down -v
 
 ```
 quickstart/
-├── docker-compose.yml   # Cluster definition (master, 2 workers, history server)
-├── README.md            # This file
+├── docker-compose.yml          # Spark cluster (master, 2 workers, history server)
+├── docker-compose.postgres.yml # Optional PostgreSQL stack for JDBC demo
+├── README.md                   # This file
+├── conf/
+│   ├── spark-defaults.conf     # Spark configuration
+│   └── spark-env.sh            # Worker resource settings
+├── postgres/
+│   └── init/
+│       └── 01_employees.sql    # Seed data for the JDBC demo
 └── jobs/
-    └── hello_spark.py   # Sample PySpark job
+    ├── hello_spark.py          # Sample PySpark job
+    ├── spark_sql_demo.py       # Spark SQL demo (Sections 01-16)
+    └── postgresql-42.7.3.jar   # JDBC driver (downloaded by jdbc-jar-downloader)
 ```
 
 Place your own `.py` job scripts under `jobs/` — the directory is mounted into every

@@ -1,0 +1,78 @@
+# docker-compose.postgres.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Standalone PostgreSQL stack for the Spark SQL JDBC demo (Section 14).
+#
+# Prerequisites
+#   The main Spark cluster must already be running so that the external
+#   network "quickstart_spark-network" exists:
+#     docker compose up -d
+#
+# Start Postgres + download JDBC JAR:
+#   docker compose -f docker-compose.postgres.yml up -d
+#
+# Stop and remove:
+#   docker compose -f docker-compose.postgres.yml down -v
+#
+# Run Section 14 of the demo (after both stacks are up):
+#   docker exec spark-master \
+#     /opt/spark/bin/spark-submit \
+#       --master spark://spark-master:7077 \
+#       --jars /opt/spark/jobs/postgresql-42.7.3.jar \
+#       /opt/spark/jobs/spark_sql_demo.py
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16
+  # Credentials and DB name match JDBC options used in spark_sql_demo.py.
+  # The init directory is mounted so 01_employees.sql runs on first start.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    container_name: spark-postgres
+    environment:
+      POSTGRES_DB:       mydb
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"           # also reachable from the host for psql / DBeaver
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d   # seed scripts
+    networks:
+      - spark-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mydb"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # One-shot container: downloads the PostgreSQL JDBC JAR into the ./jobs
+  # bind-mount so spark-master and workers can find it at
+  # /opt/spark/jobs/postgresql-42.7.3.jar without rebuilding any image.
+  # Runs as root to ensure write access to the host bind-mount directory.
+  # ---------------------------------------------------------------------------
+  jdbc-jar-downloader:
+    image: curlimages/curl:8.7.1
+    container_name: jdbc-jar-downloader
+    user: root
+    volumes:
+      - ./jobs:/opt/spark/jobs    # same bind-mount used by Spark containers
+    command: >
+      curl --silent --show-error --location --output
+      /opt/spark/jobs/postgresql-42.7.3.jar
+      https://jdbc.postgresql.org/download/postgresql-42.7.3.jar
+    networks:
+      - spark-network
+
+# ─────────────────────────────────────────────────────────────────────────────
+volumes:
+  postgres-data:
+
+networks:
+  spark-network:
+    external: true
+    name: quickstart_spark-network   # created by the main docker-compose.yml
