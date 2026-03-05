@@ -1,3 +1,7 @@
+# Modified: Added Kafka (KRaft) and HDFS services for Spark 4.1.1 training
+# Backup saved as: docker-compose.yml.bak
+# Memory budget: Kafka ~768m | NameNode ~768m | DataNode ~512m
+
 services:
 
   # ---------------------------------------------------------------------------
@@ -42,6 +46,7 @@ services:
       - spark-logs:/opt/spark-events          # shared event log directory
     networks:
       - spark-network
+      - spark-net             # reach HDFS NameNode + Kafka broker
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 15s
@@ -78,6 +83,7 @@ services:
         condition: service_healthy
     networks:
       - spark-network
+      - spark-net             # reach HDFS NameNode + Kafka broker
 
   # ---------------------------------------------------------------------------
   # Spark Worker 2
@@ -104,6 +110,7 @@ services:
         condition: service_healthy
     networks:
       - spark-network
+      - spark-net             # reach HDFS NameNode + Kafka broker
 
   # ---------------------------------------------------------------------------
   # Spark History Server
@@ -129,14 +136,123 @@ services:
         condition: service_healthy
     networks:
       - spark-network
+      - spark-net             # reach HDFS NameNode + Kafka broker
+
+  # ---------------------------------------------------------------------------
+  # Kafka Broker (KRaft mode — no ZooKeeper)
+  # Single combined broker+controller for local training use.
+  # Host listener : localhost:9092  → Spark on host machine
+  # Internal listener: broker:29092 → inter-container communication
+  # ---------------------------------------------------------------------------
+  kafka-broker:
+    image: apache/kafka:latest
+    container_name: kafka-broker
+    hostname: broker        # KRaft quorum voters and ADVERTISED_LISTENERS reference "broker"
+    ports:
+      - "9092:9092"   # PLAINTEXT_HOST — Spark on host connects here
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@broker:9093
+      KAFKA_LISTENERS: PLAINTEXT_HOST://0.0.0.0:9092,PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_HOST://localhost:9092,PLAINTEXT://broker:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_HEAP_OPTS: "-Xmx512m -Xms256m"
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - spark-net
+
+  # ---------------------------------------------------------------------------
+  # HDFS NameNode
+  # Manages filesystem namespace and block metadata.
+  # Web UI  : http://localhost:9870
+  # RPC port: hdfs://localhost:8020  ← Spark uses this
+  # ---------------------------------------------------------------------------
+  hdfs-namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: hdfs-namenode
+    ports:
+      - "9870:9870"   # NameNode Web UI
+      - "8020:8020"   # NameNode RPC (hdfs://localhost:8020)
+    environment:
+      CLUSTER_NAME: spark-training
+      CORE_CONF_fs_defaultFS: hdfs://hdfs-namenode:8020
+      HDFS_CONF_dfs_replication: 1
+      HDFS_CONF_dfs_namenode_datanode_registration_ip___hostname___check: "false"
+      HDFS_CONF_dfs_permissions_enabled: "false"   # training env – skip permission checks
+      HADOOP_HEAPSIZE: 512
+    volumes:
+      - hdfs-namenode:/hadoop/dfs/name
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9870"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - spark-net
+
+  # ---------------------------------------------------------------------------
+  # HDFS DataNode
+  # Stores actual data blocks; replication factor set to 1 for local training.
+  # ---------------------------------------------------------------------------
+  hdfs-datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: hdfs-datanode
+    environment:
+      CORE_CONF_fs_defaultFS: hdfs://hdfs-namenode:8020
+      HDFS_CONF_dfs_replication: 1
+      HDFS_CONF_dfs_datanode_data_dir: /hadoop/dfs/data
+      HDFS_CONF_dfs_permissions_enabled: "false"   # training env – skip permission checks
+      HADOOP_HEAPSIZE: 512
+    volumes:
+      - hdfs-datanode:/hadoop/dfs/data
+    depends_on:
+      hdfs-namenode:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    networks:
+      - spark-net
 
 # -----------------------------------------------------------------------------
 # Named volume shared by all Spark services for event logs.
 # Created once by Docker; the spark-perm-fix init container makes it writable.
+# hdfs-namenode / hdfs-datanode volumes persist HDFS metadata and blocks.
 # -----------------------------------------------------------------------------
 volumes:
   spark-logs:
+  hdfs-namenode:
+  hdfs-datanode:
 
 networks:
   spark-network:
+    driver: bridge
+  # Shared bridge network for Kafka, HDFS, and any Spark containers
+  spark-net:
     driver: bridge
