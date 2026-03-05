@@ -1,0 +1,35 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ETL Pipeline Demo — Configuration File
+#
+# TEACHING NOTE:
+#   Externalising configuration in YAML keeps code environment-agnostic.
+#   The pipeline reads this file at startup and builds all objects dynamically,
+#   so you can change sources, paths, or environments without touching Python.
+# ─────────────────────────────────────────────────────────────────────────────
+
+environment: dev
+
+spark:
+  app_name: ETLPipelineDemo
+  master: local[*]
+
+sources:
+  sales_csv:
+    type: csv
+    path: data/sales.csv
+    options:
+      header: "true"
+      inferSchema: "true"
+
+  api_sales:
+    type: api
+    endpoint: "https://jsonplaceholder.typicode.com/posts"   # public mock API
+    record_limit: 10
+
+pipeline:
+  transform: sales_pipeline
+
+output:
+  path: /tmp/etl_pipeline_demo/output/sales_summary
+  format: parquet
+  mode: overwrite

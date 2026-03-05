@@ -1,0 +1,21 @@
+id,product,price,quantity
+1,Laptop,1200.00,3
+2,Mouse,25.00,10
+3,Keyboard,75.00,7
+4,Monitor,450.00,5
+5,Laptop,1200.00,2
+6,Headphones,150.00,8
+7,Mouse,25.00,15
+8,Webcam,90.00,6
+9,Keyboard,75.00,4
+10,Monitor,450.00,3
+11,Laptop,1200.00,1
+12,Headphones,150.00,5
+13,USB Hub,35.00,12
+14,Mouse,25.00,20
+15,Webcam,90.00,4
+16,USB Hub,35.00,9
+17,Keyboard,75.00,6
+18,Laptop,1200.00,4
+19,Headphones,150.00,3
+20,Monitor,450.00,2
